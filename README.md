@@ -20,3 +20,6 @@ print(report)
 ## License
 
 MIT
+## Documentation
+
+See [docs](docs/index.md).
