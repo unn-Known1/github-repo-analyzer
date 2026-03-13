@@ -1,0 +1,12 @@
+{
+  "health_weights": {
+    "missing_readme": 15,
+    "no_license": 10,
+    "inactive": 20,
+    "issues_disabled": 10,
+    "missing_description": 5,
+    "no_topics": 5
+  },
+  "max_inactive_days": 90,
+  "cache_ttl_seconds": 300
+}
