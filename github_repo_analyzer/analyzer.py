@@ -71,76 +71,76 @@ class RepoAnalyzer:
                         self.logger.debug(f"Failed to parse environment override {env_var}={value}: {e}")
     
     def analyze_repo(self, repo_name: str, use_cache: bool = True) -> Dict[str, Any]:
-            """Analyze a single repository comprehensively"""
-            cache_key = f"analyze:{repo_name}"
+        """Analyze a single repository comprehensively"""
+        cache_key = f"analyze:{repo_name}"
+        if use_cache:
+            cached = self.cache.get(cache_key)
+            if cached is not None:
+                self.logger.debug(f"Cache hit for {repo_name}")
+                return cached
+
+        # If the provided path is a local directory, analyze it directly
+        if os.path.isdir(repo_name):
+            return self._analyze_local(repo_name, use_cache)
+        try:
+            self.rate_limiter.check()
+            repo = self.g.get_repo(repo_name)
+
+            stats = {
+                'name': repo.full_name,
+                'description': repo.description or '',
+                'url': repo.html_url,
+                'stars': repo.stargazers_count,
+                'forks': repo.forks_count,
+                'open_issues': repo.open_issues_count,
+                'closed_issues': repo.get_issues(state='closed').totalCount,
+                'language': repo.language,
+                'created_at': repo.created_at.isoformat() if repo.created_at else None,
+                'updated_at': repo.updated_at.isoformat() if repo.updated_at else None,
+                'pushed_at': repo.pushed_at.isoformat() if repo.pushed_at else None,
+                'default_branch': repo.default_branch,
+                'size_kb': repo.size,
+                'license': repo.license.name if repo.license else None,
+                'topics': repo.get_topics(),
+                'subscribers_count': repo.subscribers_count,
+                'watchers_count': repo.watchers_count,
+                'network_count': repo.network_count,
+                'archived': repo.archived,
+                'disabled': repo.disabled,
+            }
+
+            health = self._calculate_health(repo)
+            activity = self._get_activity_metrics(repo)
+            security = self._get_security_metrics(repo)
+            cicd = self._get_cicd_metrics(repo)
+            test_coverage = self._detect_test_coverage(repo)
+            community = self._get_community_metrics(repo)
+
+            self.rate_limiter.check()
+            traffic = self._get_traffic_metrics(repo)
+
+            result = {
+                'repository': stats,
+                'health_score': health['score'],
+                'health_factors': health['factors'],
+                'activity': activity,
+                'community': community,
+                'traffic': traffic,
+                'analysis_timestamp': datetime.now().isoformat(),
+                'security': security,
+                'cicd': cicd,
+                'test_coverage': test_coverage,
+                'analyzed_by': self.g.get_user().login
+            }
+
             if use_cache:
-                cached = self.cache.get(cache_key)
-                if cached is not None:
-                    self.logger.debug(f"Cache hit for {repo_name}")
-                    return cached
+                self.cache.set(cache_key, result)
+            return result
 
-            # If the provided path is a local directory, analyze it directly
-            if os.path.isdir(repo_name):
-                return self._analyze_local(repo_name, use_cache)
-            try:
-                self.rate_limiter.check()
-                repo = self.g.get_repo(repo_name)
-
-                stats = {
-                    'name': repo.full_name,
-                    'description': repo.description or '',
-                    'url': repo.html_url,
-                    'stars': repo.stargazers_count,
-                    'forks': repo.forks_count,
-                    'open_issues': repo.open_issues_count,
-                    'closed_issues': repo.get_issues(state='closed').totalCount,
-                    'language': repo.language,
-                    'created_at': repo.created_at.isoformat() if repo.created_at else None,
-                    'updated_at': repo.updated_at.isoformat() if repo.updated_at else None,
-                    'pushed_at': repo.pushed_at.isoformat() if repo.pushed_at else None,
-                    'default_branch': repo.default_branch,
-                    'size_kb': repo.size,
-                    'license': repo.license.name if repo.license else None,
-                    'topics': repo.get_topics(),
-                    'subscribers_count': repo.subscribers_count,
-                    'watchers_count': repo.watchers_count,
-                    'network_count': repo.network_count,
-                    'archived': repo.archived,
-                    'disabled': repo.disabled,
-                }
-
-                health = self._calculate_health(repo)
-                activity = self._get_activity_metrics(repo)
-                security = self._get_security_metrics(repo)
-                cicd = self._get_cicd_metrics(repo)
-                test_coverage = self._detect_test_coverage(repo)
-                community = self._get_community_metrics(repo)
-
-                self.rate_limiter.check()
-                traffic = self._get_traffic_metrics(repo)
-
-                result = {
-                    'repository': stats,
-                    'health_score': health['score'],
-                    'health_factors': health['factors'],
-                    'activity': activity,
-                    'community': community,
-                    'traffic': traffic,
-                    'analysis_timestamp': datetime.now().isoformat(),
-                    'security': security,
-                    'cicd': cicd,
-                    'test_coverage': test_coverage,
-                    'analyzed_by': self.g.get_user().login
-                }
-
-                if use_cache:
-                    self.cache.set(cache_key, result)
-                return result
-
-            except Exception as e:
-                self.logger.error(f"Error analyzing {repo_name}: {e}")
-                return {'error': str(e), 'repo': repo_name}
-        def _calculate_health(self, repo) -> Dict[str, Any]:
+        except Exception as e:
+            self.logger.error(f"Error analyzing {repo_name}: {e}")
+            return {'error': str(e), 'repo': repo_name}
+    def _calculate_health(self, repo) -> Dict[str, Any]:
         self.rate_limiter.check()
         """Calculate repository health score (0-100)"""
         score = 100
@@ -281,57 +281,6 @@ class RepoAnalyzer:
             }
         except Exception as e:
             return {'error': str(e)}
-    
-    def _get_community_metrics(self, repo) -> Dict[str, Any]:
-        self.rate_limiter.check()
-            """Extract community engagement metrics"""
-            try:
-                contributors = repo.get_contributors()
-                contributor_logins = []
-                total_commits = 0
-                for c in contributors:
-                    contributor_logins.append(c.login)
-                    total_commits += c.contributions
-
-                # Pull request statistics
-                pulls = repo.get_pulls(state='all')
-                prs_open = 0
-                prs_closed = 0
-                prs_merged = 0
-                for pr in pulls:
-                    if pr.state == 'open':
-                        prs_open += 1
-                    else:
-                        if pr.merged_at:
-                            prs_merged += 1
-                        else:
-                            prs_closed += 1
-
-                # Issue statistics
-                issues = repo.get_issues(state='all')
-                issues_open = 0
-                issues_closed = 0
-                for issue in issues:
-                    if issue.state == 'open':
-                        issues_open += 1
-                    else:
-                        issues_closed += 1
-
-                return {
-                    'contributors_count': len(contributor_logins),
-                    'top_contributors': contributor_logins[:5],
-                    'total_commits': total_commits,
-                    'prs_open': prs_open,
-                    'prs_closed': prs_closed,
-                    'prs_merged': prs_merged,
-                    'pr_merge_rate': round(prs_merged / (prs_merged + prs_closed) * 100, 1) if (prs_merged + prs_closed) > 0 else 0.0,
-                    'issues_open': issues_open,
-                    'issues_closed': issues_closed,
-                    'issue_response_days': None,  # Could be implemented with comment timestamps
-                }
-            except Exception as e:
-                self.logger.error(f"Error fetching community metrics: {e}")
-                return {'error': str(e)}
     
     def _get_community_metrics(self, repo) -> Dict[str, Any]:
         """Extract community engagement metrics"""
@@ -544,17 +493,25 @@ class RepoAnalyzer:
         except Exception as e:
             return {'error': str(e), 'has_coverage_report': False}
     
-    def compare_repos(self, repo_names: List[str]) -> Dict[str, Any]:
+    def compare_repos(self, repo_names: List[str], workers: int = 4) -> Dict[str, Any]:
         """Compare multiple repositories"""
         results = []
-        for repo_name in repo_names:
-            analysis = self.analyze_repo(repo_name)
-            if 'error' not in analysis:
-                results.append(analysis)
-        
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                future_to_repo = {executor.submit(self.analyze_repo, name): name for name in repo_names}
+                for future in as_completed(future_to_repo):
+                    result = future.result()
+                    if 'error' not in result:
+                        results.append(result)
+        else:
+            for repo_name in repo_names:
+                result = self.analyze_repo(repo_name)
+                if 'error' not in result:
+                    results.append(result)
+
         if not results:
             return {'error': 'No valid repositories analyzed'}
-        
+
         summary = {
             'repositories_compared': len(results),
             'avg_health_score': sum(r['health_score'] for r in results) / len(results),
@@ -566,14 +523,13 @@ class RepoAnalyzer:
             'repos_with_ci': sum(1 for r in results if r.get('cicd', {}).get('has_github_actions', False)) / len(results) * 100,
             'repos_with_coverage': sum(1 for r in results if r.get('test_coverage', {}).get('has_coverage_report', False)) / len(results) * 100,
         }
-        
+
         return {
             'comparison_timestamp': datetime.now().isoformat(),
             'repositories': [r['repository']['name'] for r in results],
             'summary': summary,
             'detailed': results
         }
-    
     def generate_html_report(self, analysis: Dict[str, Any], output_path: Optional[str] = None) -> str:
         """Generate an interactive HTML report with charts"""
         if output_path is None:
@@ -759,6 +715,16 @@ class RepoAnalyzer:
                 <tr><td>Test Command Detected</td><td>{analysis.get('cicd', {}).get('test_command_detected', 'Not detected')}</td><td class="{'positive' if analysis.get('cicd', {}).get('has_tests_command', False) else 'neutral'}">{'Found' if analysis.get('cicd', {}).get('has_tests_command', False) else 'Not Found'}</td></tr>
                 <tr><td>Coverage Report</td><td>{analysis.get('test_coverage', {}).get('coverage_file', 'None')}</td><td class="{'positive' if analysis.get('test_coverage', {}).get('has_coverage_report', False) else 'neutral'}">{'Yes' if analysis.get('test_coverage', {}).get('has_coverage_report', False) else 'No'}</td></tr>
                 <tr><td>Coverage Service</td><td colspan="2">{analysis.get('test_coverage', {}).get('coverage_service', 'Not configured')}</td></tr>
+            </table>
+
+            <!-- Traffic Metrics -->
+            <h2 class="section-title">Traffic & Reachability</h2>
+            <table>
+                <tr><th>Metric</th><th>Value</th></tr>
+                <tr><td>Views (14d)</td><td>{analysis['traffic'].get('views', 0)}</td></tr>
+                <tr><td>Unique Views</td><td>{analysis['traffic'].get('unique_views', 0)}</td></tr>
+                <tr><td>Clones (14d)</td><td>{analysis['traffic'].get('clones', 0)}</td></tr>
+                <tr><td>Unique Clones</td><td>{analysis['traffic'].get('unique_clones', 0)}</td></tr>
             </table>
             
             <!-- Activity Metrics -->
@@ -1043,6 +1009,7 @@ Examples:
     parser.add_argument('--recommendations', '-r', action='store_true', help='Show improvement recommendations')
     parser.add_argument('--history', '-H', help='JSON file with previous analyses for trend comparison')
     parser.add_argument('--include-forks', '-f', action='store_true', help='Include forks in organization analysis')
+    parser.add_argument('--workers', type=int, default=4, help='Number of parallel workers for compare action')
     
     args = parser.parse_args()
     
@@ -1112,7 +1079,7 @@ Examples:
             parser.error("compare requires at least 2 repositories")
         
         print(f"🔬 Comparing {len(args.targets)} repositories...")
-        comparison = analyzer.compare_repos(args.targets)
+        comparison = analyzer.compare_repos(args.targets, workers=args.workers)
         
         if 'error' in comparison:
             print(f"❌ ERROR: {comparison['error']}")
