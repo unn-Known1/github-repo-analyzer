@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.2.0] - 2026-03-16
+
+### Added
+- Persistent SQLite caching with TTL and cross-run cache persistence
+- Rate limit monitoring with automatic backoff to avoid GitHub API limits
+- Dependency graph analysis: parses manifest files across ecosystems (Python, JavaScript, Ruby, Java, Go, Rust, PHP, .NET, C++) to list dependencies
+- Security vulnerability context via Dependabot and Code Scanning alerts integration
+- GitHub traffic insights: views, clones, and top referrers (when authorized)
+- Parallel multi-repository comparison using ThreadPoolExecutor for speed
+- Markdown export format for reports (--export markdown)
+- Structured logging module with configurable levels and file output
+- Environment variable overrides for configuration (e.g., GITHUB_ANALYZER_CACHE_TTL)
+- Dockerfile and docker-compose support for containerized deployment
+- `--workers` CLI option to control parallelism for compare command
+- `--verbose` flag to enable debug logging
+- New CLI options: `--no-cache` now uses persistent SQLite instead of in-memory
+
+### Enhanced
+- Health scoring algorithm refined with better CI/CD detection
+- Improved error logging and reporting via logger module
+- Cache uses SQLite for persistence across runs (previous in-memory only)
+- Rate limiter prevents hitting GitHub API limits intelligently
+- Recommendations engine extended to cover security and traffic insights
+- Export system now supports HTML, JSON, CSV, and Markdown uniformly
+- Code modularization: separated logger, cache, rate limiter, dependency analyzer
+- Comparison summary includes ecosystem breakdown and dependency counts
+
+### Changed
+- `RepoAnalyzer.__init__` now sets up persistent cache and rate limiter automatically
+- `compare_repos` signature now accepts `max_workers` parameter (default 5)
+- `export_report` gained 'markdown' format support
+- Analyzer now always includes 'dependencies' field in analysis results
+- Default cache TTL increased to 600 seconds (10 minutes)
+- `__version__` bumped to "1.2.0"
+
 ## [1.1.0] - 2026-03-13
 
 ### Added

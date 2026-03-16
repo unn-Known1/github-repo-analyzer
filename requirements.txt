@@ -1,2 +1,4 @@
 PyGithub>=1.58
 python-dateutil>=2.8.0
+matplotlib>=3.5.0
+toml>=0.10.1

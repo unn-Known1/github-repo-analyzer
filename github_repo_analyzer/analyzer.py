@@ -20,6 +20,15 @@ except ImportError:
 
 import matplotlib.pyplot as plt
 import matplotlib
+from .logger import get_logger
+from .cache import SQLiteCache
+from .rate_limiter import RateLimiter
+import subprocess
+import re
+import os
+from .local_analyzer import LocalRepo, LocalDependencyAnalyzer
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 matplotlib.use('Agg')  # Non-interactive backend
 
 
@@ -28,9 +37,15 @@ class RepoAnalyzer:
     
     def __init__(self, token: str, config_path: Optional[str] = None):
         self.g = Github(token)
+        self.logger = get_logger(__name__)
         self.config = self._load_config(config_path) if config_path else {}
-        self.cache = {}
-        
+        self._apply_env_overrides()
+        cache_db = self.config.get('cache_db_path', '.github_repo_analyzer_cache.db')
+        cache_ttl = self.config.get('cache_ttl_seconds', 600)
+        self.cache = SQLiteCache(db_path=cache_db, default_ttl=cache_ttl)
+        low_thresh = self.config.get('rate_limit_low_threshold', 100)
+        self.rate_limiter = RateLimiter(self.g, low_threshold=low_thresh)
+
     def _load_config(self, path: str) -> Dict:
         """Load configuration from JSON file"""
         try:
@@ -39,65 +54,94 @@ class RepoAnalyzer:
         except:
             return {}
     
-    def analyze_repo(self, repo_name: str, use_cache: bool = True) -> Dict[str, Any]:
-        """Analyze a single repository comprehensively"""
-        cache_key = f"analyze:{repo_name}"
-        if use_cache and cache_key in self.cache:
-            return self.cache[cache_key]
-            
-        try:
-            repo = self.g.get_repo(repo_name)
-            
-            stats = {
-                'name': repo.full_name,
-                'description': repo.description or '',
-                'url': repo.html_url,
-                'stars': repo.stargazers_count,
-                'forks': repo.forks_count,
-                'open_issues': repo.open_issues_count,
-                'closed_issues': repo.get_issues(state='closed').totalCount,
-                'language': repo.language,
-                'created_at': repo.created_at.isoformat() if repo.created_at else None,
-                'updated_at': repo.updated_at.isoformat() if repo.updated_at else None,
-                'pushed_at': repo.pushed_at.isoformat() if repo.pushed_at else None,
-                'default_branch': repo.default_branch,
-                'size_kb': repo.size,
-                'license': repo.license.name if repo.license else None,
-                'topics': repo.get_topics(),
-                'subscribers_count': repo.subscribers_count,
-                'watchers_count': repo.watchers_count,
-                'network_count': repo.network_count,
-                'archived': repo.archived,
-                'disabled': repo.disabled,
+    def _apply_env_overrides(self):
+            """Apply environment variable overrides to config."""
+            env_overrides = {
+                'GITHUB_ANALYZER_CACHE_TTL': ('cache_ttl_seconds', int),
+                'GITHUB_ANALYZER_CACHE_DB': ('cache_db_path', str),
+                'GITHUB_ANALYZER_RATE_LIMIT_LOW': ('rate_limit_low_threshold', int),
+                'GITHUB_ANALYZER_MAX_INACTIVE_DAYS': ('max_inactive_days', int),
             }
-            
-            health = self._calculate_health(repo)
-            activity = self._get_activity_metrics(repo)
-            security = self._get_security_metrics(repo)
-            cicd = self._get_cicd_metrics(repo)
-            test_coverage = self._detect_test_coverage(repo)
-            community = self._get_community_metrics(repo)
-            
-            result = {
-                'repository': stats,
-                'health_score': health['score'],
-                'health_factors': health['factors'],
-                'activity': activity,
-                'community': community,
-                'analysis_timestamp': datetime.now().isoformat(),
-                'security': security,
-                'cicd': cicd,
-                'test_coverage': test_coverage,
-                'analyzed_by': self.g.get_user().login
-            }
-            
-            self.cache[cache_key] = result
-            return result
-            
-        except Exception as e:
-            return {'error': str(e), 'repo': repo_name}
+            for env_var, (config_key, cast_func) in env_overrides.items():
+                value = os.environ.get(env_var)
+                if value:
+                    try:
+                        self.config[config_key] = cast_func(value)
+                    except Exception as e:
+                        self.logger.debug(f"Failed to parse environment override {env_var}={value}: {e}")
     
-    def _calculate_health(self, repo) -> Dict[str, Any]:
+    def analyze_repo(self, repo_name: str, use_cache: bool = True) -> Dict[str, Any]:
+            """Analyze a single repository comprehensively"""
+            cache_key = f"analyze:{repo_name}"
+            if use_cache:
+                cached = self.cache.get(cache_key)
+                if cached is not None:
+                    self.logger.debug(f"Cache hit for {repo_name}")
+                    return cached
+
+            # If the provided path is a local directory, analyze it directly
+            if os.path.isdir(repo_name):
+                return self._analyze_local(repo_name, use_cache)
+            try:
+                self.rate_limiter.check()
+                repo = self.g.get_repo(repo_name)
+
+                stats = {
+                    'name': repo.full_name,
+                    'description': repo.description or '',
+                    'url': repo.html_url,
+                    'stars': repo.stargazers_count,
+                    'forks': repo.forks_count,
+                    'open_issues': repo.open_issues_count,
+                    'closed_issues': repo.get_issues(state='closed').totalCount,
+                    'language': repo.language,
+                    'created_at': repo.created_at.isoformat() if repo.created_at else None,
+                    'updated_at': repo.updated_at.isoformat() if repo.updated_at else None,
+                    'pushed_at': repo.pushed_at.isoformat() if repo.pushed_at else None,
+                    'default_branch': repo.default_branch,
+                    'size_kb': repo.size,
+                    'license': repo.license.name if repo.license else None,
+                    'topics': repo.get_topics(),
+                    'subscribers_count': repo.subscribers_count,
+                    'watchers_count': repo.watchers_count,
+                    'network_count': repo.network_count,
+                    'archived': repo.archived,
+                    'disabled': repo.disabled,
+                }
+
+                health = self._calculate_health(repo)
+                activity = self._get_activity_metrics(repo)
+                security = self._get_security_metrics(repo)
+                cicd = self._get_cicd_metrics(repo)
+                test_coverage = self._detect_test_coverage(repo)
+                community = self._get_community_metrics(repo)
+
+                self.rate_limiter.check()
+                traffic = self._get_traffic_metrics(repo)
+
+                result = {
+                    'repository': stats,
+                    'health_score': health['score'],
+                    'health_factors': health['factors'],
+                    'activity': activity,
+                    'community': community,
+                    'traffic': traffic,
+                    'analysis_timestamp': datetime.now().isoformat(),
+                    'security': security,
+                    'cicd': cicd,
+                    'test_coverage': test_coverage,
+                    'analyzed_by': self.g.get_user().login
+                }
+
+                if use_cache:
+                    self.cache.set(cache_key, result)
+                return result
+
+            except Exception as e:
+                self.logger.error(f"Error analyzing {repo_name}: {e}")
+                return {'error': str(e), 'repo': repo_name}
+        def _calculate_health(self, repo) -> Dict[str, Any]:
+        self.rate_limiter.check()
         """Calculate repository health score (0-100)"""
         score = 100
         factors = []
@@ -156,6 +200,7 @@ class RepoAnalyzer:
             return False
     
     def _get_security_metrics(self, repo) -> Dict[str, Any]:
+        self.rate_limiter.check()
         """Extract security-related metrics from GitHub"""
         try:
             security_metrics = {
@@ -203,6 +248,7 @@ class RepoAnalyzer:
             return {'error': str(e), 'dependabot_alerts_count': 0, 'code_scanning_alerts_count': 0, 'has_security_policy': False}
     
     def _get_activity_metrics(self, repo) -> Dict[str, Any]:
+        self.rate_limiter.check()
         """Extract activity-related metrics"""
         try:
             commits = repo.get_commits()
@@ -237,6 +283,57 @@ class RepoAnalyzer:
             return {'error': str(e)}
     
     def _get_community_metrics(self, repo) -> Dict[str, Any]:
+        self.rate_limiter.check()
+            """Extract community engagement metrics"""
+            try:
+                contributors = repo.get_contributors()
+                contributor_logins = []
+                total_commits = 0
+                for c in contributors:
+                    contributor_logins.append(c.login)
+                    total_commits += c.contributions
+
+                # Pull request statistics
+                pulls = repo.get_pulls(state='all')
+                prs_open = 0
+                prs_closed = 0
+                prs_merged = 0
+                for pr in pulls:
+                    if pr.state == 'open':
+                        prs_open += 1
+                    else:
+                        if pr.merged_at:
+                            prs_merged += 1
+                        else:
+                            prs_closed += 1
+
+                # Issue statistics
+                issues = repo.get_issues(state='all')
+                issues_open = 0
+                issues_closed = 0
+                for issue in issues:
+                    if issue.state == 'open':
+                        issues_open += 1
+                    else:
+                        issues_closed += 1
+
+                return {
+                    'contributors_count': len(contributor_logins),
+                    'top_contributors': contributor_logins[:5],
+                    'total_commits': total_commits,
+                    'prs_open': prs_open,
+                    'prs_closed': prs_closed,
+                    'prs_merged': prs_merged,
+                    'pr_merge_rate': round(prs_merged / (prs_merged + prs_closed) * 100, 1) if (prs_merged + prs_closed) > 0 else 0.0,
+                    'issues_open': issues_open,
+                    'issues_closed': issues_closed,
+                    'issue_response_days': None,  # Could be implemented with comment timestamps
+                }
+            except Exception as e:
+                self.logger.error(f"Error fetching community metrics: {e}")
+                return {'error': str(e)}
+    
+    def _get_community_metrics(self, repo) -> Dict[str, Any]:
         """Extract community engagement metrics"""
         try:
             open_issues = repo.open_issues_count
@@ -262,6 +359,7 @@ class RepoAnalyzer:
             return {'error': str(e)}
     
     def _get_cicd_metrics(self, repo) -> Dict[str, Any]:
+        self.rate_limiter.check()
         """Analyze CI/CD pipeline usage and health"""
         try:
             cicd_metrics = {
@@ -334,6 +432,64 @@ class RepoAnalyzer:
             return cicd_metrics
         except Exception as e:
             return {'error': str(e), 'has_github_actions': False, 'ci_systems': []}
+    
+    def _get_traffic_metrics(self, repo) -> Dict[str, Any]:
+            """Get repository traffic metrics (views, clones, referrers)"""
+            self.rate_limiter.check()
+            try:
+                traffic = {
+                    'views': 0,
+                    'unique_views': 0,
+                    'clones': 0,
+                    'unique_clones': 0,
+                    'top_referrers': [],
+                    'top_paths': [],
+                }
+
+                # Get views
+                try:
+                    views = repo.get_views_traffic()
+                    traffic['views'] = views.count
+                    traffic['unique_views'] = views.uniques
+                except Exception as e:
+                    self.logger.debug(f"Traffic views not available: {e}")
+
+                # Get clones
+                try:
+                    clones = repo.get_clones_traffic()
+                    traffic['clones'] = clones.count
+                    traffic['unique_clones'] = clones.uniques
+                except Exception as e:
+                    self.logger.debug(f"Traffic clones not available: {e}")
+
+                # Get top referrers (last 14 days)
+                try:
+                    referrers = repo.get_top_referrers()
+                    for ref in referrers[:5]:
+                        traffic['top_referrers'].append({
+                            'referrer': ref.referrer,
+                            'count': ref.count,
+                            'uniques': ref.uniques,
+                        })
+                except Exception as e:
+                    self.logger.debug(f"Traffic referrers not available: {e}")
+
+                # Get top paths
+                try:
+                    paths = repo.get_top_paths()
+                    for p in paths[:5]:
+                        traffic['top_paths'].append({
+                            'path': p.path,
+                            'title': p.title,
+                            'count': p.count,
+                            'uniques': p.uniques,
+                        })
+                except Exception as e:
+                    self.logger.debug(f"Traffic paths not available: {e}")
+
+                return traffic
+            except Exception as e:
+                return {'error': str(e)}
     
     def _detect_test_coverage(self, repo) -> Dict[str, Any]:
         """Detect test coverage reporting"""

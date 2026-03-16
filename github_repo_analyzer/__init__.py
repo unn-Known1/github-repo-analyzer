@@ -4,7 +4,7 @@ GitHub Repository Analyzer
 Analyze GitHub repository health, metrics, and generate comprehensive reports.
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __author__ = "Your Name"
 __email__ = "your.email@example.com"
 

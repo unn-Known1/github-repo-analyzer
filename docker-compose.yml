@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  analyzer:
+    build: .
+    container_name: repo-analyzer
+    volumes:
+      # Persist cache and logs
+      - ./data:/app/data
+      # Optional config (if present)
+      - ./config.json:/app/config.json:ro
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_ANALYZER_CACHE_DB=/app/data/cache.db
+      - GITHUB_ANALYZER_LOG_FILE=/app/data/analyzer.log
+    # Override command as needed, e.g.:
+    # command: ["analyze", "owner/repo", "--export", "html", "--output", "/app/data/report.html"]
+    stdin_open: true
+    tty: true

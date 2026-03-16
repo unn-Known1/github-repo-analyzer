@@ -1,0 +1,46 @@
+# Git files
+.git
+.gitignore
+
+# Python artifacts
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+.env
+.venv
+venv
+env
+
+# Build and distribution
+dist
+build
+*.egg-info
+
+# IDE and editor files
+.vscode
+.idea
+*.sublime-*
+
+# Test and coverage
+tests
+.pytest_cache
+coverage.xml
+htmlcov
+
+# Documentation build
+docs/_build
+site
+
+# Data files (cache, logs, reports) – can be mounted via volume
+data
+cache.db
+*.log
+*.json
+!config.example.json
+!requirements.txt
+
+# Others
+*.bak
+.DS_Store
